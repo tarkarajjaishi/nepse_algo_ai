@@ -17,6 +17,7 @@ genuinely unavailable rather than approximated from something else.
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Annotated
 
@@ -49,12 +50,27 @@ _HEADLINE = ("USD", "INR", "EUR", "AED", "SAR", "MYR")
 def _fetch(from_date: str, to_date: str) -> list[dict]:
     url = f"{BASE_URL}{RATES_PATH}"
     params = {"from": from_date, "to": to_date, "per_page": 100, "page": 1}
-    try:
-        resp = requests.get(url, params=params, timeout=TIMEOUT_SECONDS)
-    except requests.exceptions.ConnectionError as exc:
-        raise VendorNotConfiguredError(f"cannot reach NRB at {BASE_URL}: {exc}") from exc
-    except requests.exceptions.RequestException as exc:
-        raise NoMarketDataError("NRB", None, f"forex request failed: {exc}") from exc
+
+    # NRB intermittently closes the connection without a response. Observed
+    # twice within an hour, and it succeeds on an immediate retry, so one retry
+    # turns a routine blip into a non-event rather than a missing macro report.
+    last_exc: Exception | None = None
+    resp = None
+    for attempt in (1, 2):
+        try:
+            resp = requests.get(url, params=params, timeout=TIMEOUT_SECONDS)
+            break
+        except requests.exceptions.ConnectionError as exc:
+            last_exc = exc
+            if attempt == 2:
+                raise VendorNotConfiguredError(
+                    f"cannot reach NRB at {BASE_URL} after 2 attempts: {exc}"
+                ) from exc
+            time.sleep(1.5)
+        except requests.exceptions.RequestException as exc:
+            raise NoMarketDataError("NRB", None, f"forex request failed: {exc}") from exc
+    if resp is None:                                    # pragma: no cover
+        raise VendorNotConfiguredError(f"cannot reach NRB at {BASE_URL}: {last_exc}")
     if not resp.ok:
         raise NoMarketDataError("NRB", None, f"NRB returned HTTP {resp.status_code}")
 

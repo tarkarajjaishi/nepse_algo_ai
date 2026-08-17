@@ -58,6 +58,29 @@ def create_sentiment_analyst(llm):
     """
     structured_llm = bind_structured(llm, SentimentReport, "Sentiment Analyst")
 
+    def _chatter_sources(ticker: str) -> tuple[str, str]:
+        """StockTwits and Reddit blocks, skipped where they cannot possibly help.
+
+        Both are US retail venues with no NEPSE coverage whatsoever: StockTwits
+        404s on every Nepali ticker, and the finance subreddits never mention
+        them. Querying anyway costs a round trip each, trips Reddit's per-IP rate
+        limit (which then degrades the *next* run for a ticker they do cover),
+        and hands the model three failure placeholders that read like three
+        attempted signals. Saying "not applicable to this market" is both cheaper
+        and more accurate than saying "we looked and found nothing".
+        """
+        from tradingagents.dataflows.config import get_config
+
+        vendors = get_config().get("data_vendors", {})
+        if "nepse" in str(vendors.get("core_stock_apis", "")):
+            skipped = (
+                "<not queried: {venue} has no NEPSE coverage. This is a market "
+                "limitation, not an absence of chatter — draw no inference from it.>"
+            )
+            return skipped.format(venue="StockTwits"), skipped.format(venue="Reddit")
+
+        return fetch_stocktwits_messages(ticker, limit=30), fetch_reddit_posts(ticker)
+
     def sentiment_analyst_node(state):
         ticker = state["company_of_interest"]
         end_date = state["trade_date"]
@@ -68,8 +91,7 @@ def create_sentiment_analyst(llm):
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
         news_block = get_news.func(ticker, start_date, end_date)
-        stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
+        stocktwits_block, reddit_block = _chatter_sources(ticker)
 
         system_message = _build_system_message(
             ticker=ticker,

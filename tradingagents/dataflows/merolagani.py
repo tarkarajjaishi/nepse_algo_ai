@@ -87,21 +87,47 @@ def _fetch_headlines() -> list[dict]:
     return _news_cache
 
 
-def _within(published: str, curr_date: str, days: int) -> bool:
-    """True when a headline falls inside the lookback, or its date is unreadable.
+def _parse_published(published: str) -> datetime | None:
+    """'Aug 17, 2026 10:24 AM' -> datetime, or None when unreadable."""
+    try:
+        parts = published.split(" ")
+        return datetime.strptime(f"{parts[0]} {parts[1].rstrip(',')} {parts[2]}", "%b %d %Y")
+    except (ValueError, IndexError, AttributeError):
+        return None
 
-    Unparseable dates are kept rather than dropped: losing a real headline is a
-    worse failure than showing one slightly outside the window.
+
+def _between(published: str, start_date: str, end_date: str) -> bool:
+    """True when a headline falls in [start_date, end_date], inclusive.
+
+    Anything unparseable — the headline's date or either bound — is kept rather
+    than dropped: losing a real headline is a worse failure than showing one
+    slightly outside the window.
     """
-    if not published or not curr_date:
+    when = _parse_published(published)
+    if when is None:
+        return True
+    for bound, keep_if_before in ((start_date, False), (end_date, True)):
+        try:
+            edge = datetime.strptime(bound, "%Y-%m-%d")
+        except (ValueError, TypeError):
+            continue                       # unusable bound: do not filter on it
+        if keep_if_before and when > edge + timedelta(days=1):
+            return False
+        if not keep_if_before and when < edge:
+            return False
+    return True
+
+
+def _within(published: str, curr_date: str, days: int) -> bool:
+    """True when a headline falls within ``days`` before ``curr_date``."""
+    when = _parse_published(published)
+    if when is None or not curr_date:
         return True
     try:
-        when = datetime.strptime(published.split(" ")[0] + " " + published.split(" ")[1].rstrip(",")
-                                 + " " + published.split(" ")[2], "%b %d %Y")
-        cutoff = datetime.strptime(curr_date, "%Y-%m-%d") - timedelta(days=days)
-        return when >= cutoff
-    except (ValueError, IndexError):
+        cutoff = datetime.strptime(curr_date, "%Y-%m-%d") - timedelta(days=int(days))
+    except (ValueError, TypeError):
         return True
+    return when >= cutoff
 
 
 def _render(items: list[dict], heading: str, note: str) -> str:
@@ -116,10 +142,18 @@ def _render(items: list[dict], heading: str, note: str) -> str:
 
 def get_merolagani_global_news(
     curr_date: Annotated[str, "current date, yyyy-mm-dd"],
-    look_back_days: Annotated[int, "how many days back"] = 7,
+    look_back_days: Annotated[int | None, "how many days back"] = None,
+    limit: Annotated[int | None, "max headlines to return"] = None,
 ) -> str:
-    """Nepali market and macro headlines from the merolagani news desk."""
+    """Nepali market and macro headlines from the merolagani news desk.
+
+    Signature matches the ``get_global_news`` vendor contract, including the
+    ``limit`` the router passes; omitting it crashed the news analyst.
+    """
+    look_back_days = look_back_days or 7
     items = [i for i in _fetch_headlines() if _within(i["published"], curr_date, look_back_days)]
+    if limit:
+        items = items[:limit]
     if not items:
         return (
             f"<no merolagani headlines in the {look_back_days} days before {curr_date}. "
@@ -134,19 +168,24 @@ def get_merolagani_global_news(
 
 
 def get_merolagani_news(
-    symbol: Annotated[str, "NEPSE ticker, e.g. NABIL"],
-    curr_date: Annotated[str, "current date, yyyy-mm-dd"] = "",
-    look_back_days: Annotated[int, "how many days back"] = 7,
+    ticker: Annotated[str, "NEPSE ticker, e.g. NABIL"],
+    start_date: Annotated[str, "window start, yyyy-mm-dd"] = "",
+    end_date: Annotated[str, "window end, yyyy-mm-dd"] = "",
 ) -> str:
-    """Headlines mentioning ``symbol``, falling back to the market tape.
+    """Headlines mentioning ``ticker``, falling back to the market tape.
+
+    Signature matches the ``get_news`` vendor contract — ``(ticker, start_date,
+    end_date)``, two date strings — not a lookback count. Getting that wrong fed
+    a date where a day count belonged and crashed the sentiment analyst.
 
     Merolagani has no public per-company news filter, so this searches the market
     tape for the ticker. Most headlines are Nepali, where a Latin ticker seldom
     appears, so a nil result is common and is reported as such — the analyst is
     told it is looking at market context, not a company feed.
     """
-    symbol = symbol.strip().upper()
-    items = [i for i in _fetch_headlines() if _within(i["published"], curr_date, look_back_days)]
+    symbol = ticker.strip().upper()
+    curr_date = end_date or start_date
+    items = [i for i in _fetch_headlines() if _between(i["published"], start_date, end_date)]
     pattern = re.compile(rf"\b{re.escape(symbol)}\b", re.IGNORECASE)
     hits = [i for i in items if pattern.search(i["title"])]
 
@@ -157,11 +196,12 @@ def get_merolagani_news(
             "Matched by ticker against the market tape.",
         )
     if not items:
-        return f"<merolagani had no headlines in the {look_back_days} days before {curr_date}>"
+        return f"<merolagani had no headlines between {start_date} and {end_date}>"
     return _render(
         items,
         f"No {symbol}-specific headlines — Nepali market tape to {curr_date}",
-        f"IMPORTANT: nothing published mentioned {symbol} by ticker in this window, "
+        f"IMPORTANT: nothing published mentioned {symbol} by ticker between "
+        f"{start_date or 'the window start'} and {end_date or 'now'}, "
         "and merolagani offers no per-company filter. Treat the items below as "
         f"market background only — do NOT attribute any of them to {symbol}.",
     )
@@ -171,6 +211,13 @@ def demo() -> None:
     """Self-check. Offline assertions; add --live to hit the real site."""
     import sys
 
+    # The bug that crashed the sentiment analyst: get_news passes two date
+    # strings, so a day-count parameter received "2026-08-14" and blew up in
+    # timedelta. Guard the real contract, not the one I assumed.
+    assert _between("Aug 17, 2026 10:24 AM", "2026-08-10", "2026-08-17")
+    assert not _between("Aug 1, 2026 09:00 AM", "2026-08-10", "2026-08-17")
+    assert _between("garbled", "2026-08-10", "2026-08-17")
+    assert _between("Aug 17, 2026 10:24 AM", "", "")      # unusable bounds: keep
     assert _within("Aug 17, 2026 10:24 AM", "2026-08-17", 7)
     assert not _within("Aug 1, 2026 10:24 AM", "2026-08-17", 7)
     # An unreadable date must be kept, never silently dropped.

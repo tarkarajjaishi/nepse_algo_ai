@@ -162,24 +162,32 @@ def _render(symbol: str, wanted: tuple[str, ...], title: str) -> str:
 
 
 def get_nepsetrading_income_statement(
-    symbol: Annotated[str, "NEPSE ticker, e.g. NABIL"],
+    ticker: Annotated[str, "NEPSE ticker, e.g. NABIL"],
+    freq: Annotated[str, "reporting frequency; only quarterly is published"] = "quarterly",
     curr_date: Annotated[str, "current date, yyyy-mm-dd"] = "",
 ) -> str:
-    """Quarterly income statement across the published fiscal years."""
+    """Quarterly income statement across the published fiscal years.
+
+    Signature matches the ``get_income_statement`` vendor contract, which passes
+    a reporting frequency between the ticker and the date. NEPSE companies file
+    quarterly, so ``freq`` is accepted and noted rather than honoured — an annual
+    request still returns the quarterly series, which is what exists.
+    """
     return _render(
-        symbol,
+        ticker,
         ("Net Interest Income", "Net Profit", "Distributable Profit", "Impairment Charge"),
         "Income statement",
     )
 
 
 def get_nepsetrading_balance_sheet(
-    symbol: Annotated[str, "NEPSE ticker, e.g. NABIL"],
+    ticker: Annotated[str, "NEPSE ticker, e.g. NABIL"],
+    freq: Annotated[str, "reporting frequency; only quarterly is published"] = "quarterly",
     curr_date: Annotated[str, "current date, yyyy-mm-dd"] = "",
 ) -> str:
     """Quarterly balance sheet across the published fiscal years."""
     return _render(
-        symbol,
+        ticker,
         ("Total Assets", "Deposits", "Total Liabilities", "Paid Up Capital",
          "Loans & Advances", "Reserves & Surplus"),
         "Balance sheet",
@@ -187,12 +195,13 @@ def get_nepsetrading_balance_sheet(
 
 
 def get_nepsetrading_ratios(
-    symbol: Annotated[str, "NEPSE ticker, e.g. NABIL"],
+    ticker: Annotated[str, "NEPSE ticker, e.g. NABIL"],
+    freq: Annotated[str, "reporting frequency; only quarterly is published"] = "quarterly",
     curr_date: Annotated[str, "current date, yyyy-mm-dd"] = "",
 ) -> str:
     """Per-quarter ratios: margins, EPS, growth, NPL, P/E and P/BV where published."""
     return _render(
-        symbol,
+        ticker,
         ("EPS (Annu.)", "EPS (TTM)", "Net Interest Margin (%)",
          "Net Profit Margin (%)", "Earnings Growth (%)"),
         "Key ratios",
