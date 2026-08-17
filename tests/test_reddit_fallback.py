@@ -85,9 +85,10 @@ class TestRssParsing:
         assert posts[0]["created_utc"] > 0
         assert "datacenter unit" in posts[0]["selftext"]
 
-    def test_malformed_xml_fails_open(self):
+    def test_malformed_xml_fails_open_as_unknown(self):
+        """None, not [] — a parse failure is "could not check", not "nothing there"."""
         with patch.object(reddit, "urlopen", return_value=_resp(lambda: b"<<not xml>>")):
-            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) == []
+            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) is None
 
 
 @pytest.mark.unit
@@ -138,7 +139,9 @@ class TestRss429Backoff:
              patch.object(reddit.time, "sleep"):
             posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
         assert op.call_count == 2          # one retry, then gives up cleanly
-        assert posts == []
+        # None, not []: a rate-limited fetch must not be reported downstream as
+        # a confirmed absence of posts.
+        assert posts is None
 
     def test_retry_after_header_is_honoured(self):
         err = HTTPError("url", 429, "Too Many Requests", {"Retry-After": "12"}, None)
@@ -153,9 +156,9 @@ class TestChunkedTransferErrorsHandled:
     """IncompleteRead/RemoteDisconnected come from http.client and are NOT
     OSErrors, so they were previously uncaught and crashed the pipeline (#1024)."""
 
-    def test_rss_incomplete_read_degrades_to_empty(self):
+    def test_rss_incomplete_read_degrades_to_unknown(self):
         with patch.object(reddit, "urlopen", return_value=_raise(http.client.IncompleteRead(b""))):
-            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) == []
+            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) is None
 
     def test_json_incomplete_read_falls_back_to_rss(self):
         with patch.object(reddit, "urlopen", return_value=_raise(http.client.IncompleteRead(b""))), \
@@ -212,3 +215,32 @@ class TestCryptoSearchTerm:
 
     def test_equity_passes_through(self):
         assert self._captured_ticker("NVDA") == "NVDA"
+
+
+@pytest.mark.unit
+class TestFetchFailureIsNotSilence:
+    """A failed fetch and a genuinely quiet tape must not render identically.
+
+    sentiment_analyst.py tells the model to lower its confidence when a source
+    reports ``<unavailable>``. Reporting a rate-limited fetch as "no posts found"
+    instead presents zero data as a confirmed finding, and confidence stays high.
+    """
+
+    def test_all_sources_failing_reports_unknown_not_silence(self):
+        with patch.object(reddit, "_fetch_subreddit", return_value=None):
+            out = reddit.fetch_reddit_posts("NVDA", inter_request_delay=0)
+        assert "unavailable" in out
+        assert "no Reddit posts found" not in out
+
+    def test_all_sources_empty_reports_genuine_silence(self):
+        with patch.object(reddit, "_fetch_subreddit", return_value=[]):
+            out = reddit.fetch_reddit_posts("NVDA", inter_request_delay=0)
+        assert "no Reddit posts found" in out
+        assert "unavailable" not in out
+
+    def test_partial_failure_is_flagged_as_partial_coverage(self):
+        results = iter([None, [], []])
+        with patch.object(reddit, "_fetch_subreddit", side_effect=lambda *a, **k: next(results)):
+            out = reddit.fetch_reddit_posts("NVDA", inter_request_delay=0)
+        assert "partial" in out
+        assert "wallstreetbets" in out

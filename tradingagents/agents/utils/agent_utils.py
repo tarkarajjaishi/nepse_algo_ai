@@ -93,7 +93,15 @@ def resolve_instrument_identity(ticker: str) -> dict:
     The symbol is normalized first (e.g. ``XAUUSD`` -> ``GC=F``) so identity
     resolves for the same instrument the price path actually fetches (#983).
     """
+    from tradingagents.dataflows.config import get_config
     from tradingagents.dataflows.symbol_utils import normalize_symbol
+
+    # NEPSE tickers are not on Yahoo, so the lookup below would 404 and leave the
+    # guard inert exactly where it is most needed. Ask the NEPSE vendor instead.
+    if "nepse" in str(get_config().get("data_vendors", {}).get("core_stock_apis", "")):
+        from tradingagents.dataflows.nepse import resolve_nepse_identity
+
+        return resolve_nepse_identity(ticker)
 
     try:
         info = yf.Ticker(normalize_symbol(ticker)).info or {}

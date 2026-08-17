@@ -170,10 +170,16 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     # the curr_date filter below.
     end_str = (today_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
+    # OHLCV follows the configured core_stock_apis vendor, so every indicator
+    # below works for any market this framework has a vendor for — not just
+    # Yahoo's. The cache is tagged per source so switching markets can never
+    # serve one vendor's bars to another.
+    use_nepse = "nepse" in str(config.get("data_vendors", {}).get("core_stock_apis", ""))
+
     os.makedirs(config["data_cache_dir"], exist_ok=True)
     data_file = os.path.join(
         config["data_cache_dir"],
-        f"{safe_symbol}-YFin-data-{start_str}-{end_str}.csv",
+        f"{safe_symbol}-{'NEPSE' if use_nepse else 'YFin'}-data-{start_str}-{end_str}.csv",
     )
 
     # A cached file may be empty if a prior fetch failed (unknown symbol,
@@ -192,19 +198,26 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
             data = cached
 
     if data is None:
-        downloaded = yf_retry(lambda: yf.download(
-            canonical,
-            start=start_str,
-            end=end_str,
-            multi_level_index=False,
-            progress=False,
-            auto_adjust=True,
-        ))
-        downloaded = _ensure_date_column(downloaded.reset_index())
+        if use_nepse:
+            from .nepse import fetch_nepse_ohlcv
+
+            downloaded = fetch_nepse_ohlcv(canonical)
+            source = "NEPSE"
+        else:
+            downloaded = yf_retry(lambda: yf.download(
+                canonical,
+                start=start_str,
+                end=end_str,
+                multi_level_index=False,
+                progress=False,
+                auto_adjust=True,
+            ))
+            downloaded = _ensure_date_column(downloaded.reset_index())
+            source = "Yahoo Finance"
         # Only cache real data — never persist an empty frame.
         if downloaded.empty or "Close" not in downloaded.columns:
             raise NoMarketDataError(
-                symbol, canonical, "Yahoo Finance returned no rows"
+                symbol, canonical, f"{source} returned no rows"
             )
         downloaded.to_csv(data_file, index=False, encoding="utf-8")
         data = downloaded
@@ -215,8 +228,15 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     data = data[data["Date"] <= curr_date_dt]
 
     # Reject a stale frame (latest row far older than curr_date) rather than
-    # feeding year-old prices into indicators (#1021).
-    _assert_ohlcv_not_stale(data, curr_date, symbol, canonical)
+    # feeding year-old prices into indicators (#1021). NEPSE gets a wider budget:
+    # Dashain/Tihar shut the exchange well past the 10-day default.
+    if use_nepse:
+        from .nepse import MAX_STALE_DAYS as stale_budget
+    else:
+        stale_budget = MAX_OHLCV_STALE_DAYS
+    _assert_ohlcv_not_stale(
+        data, curr_date, symbol, canonical, max_stale_days=stale_budget
+    )
 
     return data
 

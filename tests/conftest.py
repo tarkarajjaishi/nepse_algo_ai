@@ -5,6 +5,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# A developer .env must not steer the suite. tradingagents/__init__ loads .env
+# on import with override=False, and default_config applies the market switch at
+# import time — too early for a fixture to undo. Pre-seeding a blank here wins
+# over .env, so the tests keep asserting the shipped Yahoo defaults even on a
+# machine configured for another market (TRADINGAGENTS_MARKET=nepse).
+os.environ["TRADINGAGENTS_MARKET"] = ""
+
 
 def pytest_configure(config):
     for marker in ("unit", "integration", "smoke"):

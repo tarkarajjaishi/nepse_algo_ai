@@ -18,6 +18,21 @@ from .errors import (
     VendorRateLimitError,
 )
 from .fred import get_macro_data as get_fred_macro_data
+from .merolagani import get_merolagani_global_news, get_merolagani_news
+from .nepse import (
+    get_nepse_balance_sheet,
+    get_nepse_cashflow,
+    get_nepse_fundamentals,
+    get_nepse_global_news,
+    get_nepse_income_statement,
+    get_nepse_insider_transactions,
+    get_nepse_news,
+    get_nepse_stock_data,
+)
+from .nepsetrading import (
+    get_nepsetrading_balance_sheet,
+    get_nepsetrading_income_statement,
+)
 from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
 from .y_finance import (
     get_balance_sheet as get_yfinance_balance_sheet,
@@ -82,6 +97,9 @@ VENDOR_LIST = [
     "fred",
     "polymarket",
     "alpha_vantage",
+    "nepse",
+    "nepsetrading",
+    "merolagani",
 ]
 
 # Optional enrichment categories. These add macro/event context to the news
@@ -97,41 +115,57 @@ VENDOR_METHODS = {
     "get_stock_data": {
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
+        "nepse": get_nepse_stock_data,
     },
     # technical_indicators
     "get_indicators": {
         "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
+        # Same function as yfinance: indicators are computed locally by
+        # stockstats, and load_ohlcv sources the bars from whichever vendor
+        # core_stock_apis names. Nothing here is Yahoo-specific.
+        "nepse": get_stock_stats_indicators_window,
     },
     # fundamental_data
     "get_fundamentals": {
         "alpha_vantage": get_alpha_vantage_fundamentals,
         "yfinance": get_yfinance_fundamentals,
+        "nepse": get_nepse_fundamentals,
     },
     "get_balance_sheet": {
         "alpha_vantage": get_alpha_vantage_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
+        "nepse": get_nepse_balance_sheet,
+        "nepsetrading": get_nepsetrading_balance_sheet,
     },
     "get_cashflow": {
         "alpha_vantage": get_alpha_vantage_cashflow,
         "yfinance": get_yfinance_cashflow,
+        "nepse": get_nepse_cashflow,
     },
     "get_income_statement": {
         "alpha_vantage": get_alpha_vantage_income_statement,
         "yfinance": get_yfinance_income_statement,
+        "nepse": get_nepse_income_statement,
+        "nepsetrading": get_nepsetrading_income_statement,
     },
     # news_data
     "get_news": {
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
+        "nepse": get_nepse_news,
+        "merolagani": get_merolagani_news,
     },
     "get_global_news": {
         "yfinance": get_global_news_yfinance,
         "alpha_vantage": get_alpha_vantage_global_news,
+        "nepse": get_nepse_global_news,
+        "merolagani": get_merolagani_global_news,
     },
     "get_insider_transactions": {
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
+        "nepse": get_nepse_insider_transactions,
     },
     # macro_data
     "get_macro_indicators": {

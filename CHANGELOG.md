@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [Unreleased] — NEPSE (Nepal Stock Exchange) support
+
+Adds Nepali market coverage to a framework that previously reached only markets
+Yahoo Finance serves, plus cross-provider LLM failover so a run can complete on
+free tiers alone.
+
+### Added
+
+- **NEPSE data vendor** (`dataflows/nepse.py`) — prices, indicators, company
+  record and 52-week range via a self-hosted NepseAPI server. Indicators reuse
+  the existing `stockstats` path unchanged; only OHLCV sourcing needed a branch.
+- **Quarterly financials** (`dataflows/nepsetrading.py`) — income statement and
+  balance sheet across five fiscal years, filling a gap NEPSE leaves entirely.
+- **Nepali market news** (`dataflows/merolagani.py`) — headlines with timestamps,
+  passed through untranslated.
+- **Cross-provider LLM failover** (`llm_clients/fallback.py`) — ordered
+  `provider:model` chain via `TRADINGAGENTS_LLM_FALLBACKS`, moving on when a
+  provider reports exhausted quota or an upstream outage. `openrouter:auto`
+  discovers genuinely free, tool-capable models from the live catalogue.
+- **`TRADINGAGENTS_MARKET=nepse`** — one switch routing the four core data
+  categories at the Nepali vendors, for both `main.py` and the CLI.
+- **Dashboard** (`dashboard.html`) — market, agent pipeline and decision, with
+  Nepal Standard Time and Bikram Sambat dates.
+
+### Fixed
+
+- Reddit reported a failed fetch as "no posts found", which reads as a confirmed
+  quiet tape. A rate-limited fetch now returns an explicit unavailable marker, so
+  the sentiment analyst discounts its confidence instead of treating zero data as
+  a finding.
+
+### Notes
+
+- NEPSE publishes no opening price, no news feed and no insider disclosures, and
+  its quarterly reports are PDF-only. Every such gap returns an explicit
+  "unavailable" sentinel; nothing is estimated or synthesised.
+- NEPSE moved from Sunday–Thursday to Monday–Friday trading in April 2026. The
+  trading week is derived from returned bars, never assumed.
+- Alpha vs benchmark cannot be backfilled — NEPSE serves no multi-day index
+  history — so the index series accrues forward from first run.
+
 ## [0.3.1] — 2026-07-05
 
 Correctness and stability patch: data look-ahead, graph-router crash-safety,

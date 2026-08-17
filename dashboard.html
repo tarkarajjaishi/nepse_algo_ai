@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NEPSE Console</title>
+<style>
+  :root{
+    /* Indigo-slate instrument panel. Crimson and jade are reserved for
+       direction (down/up) so they never read as decoration; saffron means
+       "no data" and is the only other colour on the page. */
+    --bg:#131620; --panel:#191D29; --panel2:#1F2432; --line:#2B3244;
+    --text:#E9E5DC; --dim:#868FA6; --faint:#5A6379;
+    --up:#4FB286; --down:#E23E57; --unknown:#D9A03F;
+    --mono:ui-monospace,"Cascadia Mono","Cascadia Code",Consolas,monospace;
+    --sans:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans)}
+  body{padding:20px;max-width:1180px;margin:0 auto;font-size:14px;line-height:1.45}
+
+  /* Micro-labels: the instrument vernacular. Small, wide, quiet. */
+  .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+         border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:18px}
+  h1{font-size:19px;font-weight:650;letter-spacing:-.02em;margin:0}
+  h1 span{color:var(--dim);font-weight:400}
+  .spacer{flex:1}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px;
+       background:var(--unknown);vertical-align:middle}
+  .dot.ok{background:var(--up)} .dot.bad{background:var(--down)}
+  button{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+         background:transparent;color:var(--dim);border:1px solid var(--line);
+         padding:5px 11px;border-radius:2px;cursor:pointer}
+  button:hover{color:var(--text);border-color:var(--dim)}
+  button:focus-visible,select:focus-visible{outline:2px solid var(--up);outline-offset:2px}
+
+  /* Index rail */
+  .rail{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));
+        gap:1px;background:var(--line);border:1px solid var(--line);margin-bottom:18px}
+  .rail>div{background:var(--panel);padding:11px 13px}
+  .rail .v{font-size:21px;font-weight:600;margin-top:3px}
+  .chg{font-size:11.5px;margin-left:7px;font-weight:500}
+  .up{color:var(--up)} .down{color:var(--down)} .unk{color:var(--unknown)}
+
+  .grid{display:grid;grid-template-columns:1.55fr 1fr;gap:16px;align-items:start}
+  @media(max-width:860px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);padding:15px}
+  .card+.card{margin-top:16px}
+  .head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+
+  select{font-family:var(--mono);font-size:13px;background:var(--panel2);color:var(--text);
+         border:1px solid var(--line);padding:6px 9px;border-radius:2px;max-width:280px}
+
+  .price{font-size:40px;font-weight:650;letter-spacing:-.03em;line-height:1}
+  .cur{font-size:15px;color:var(--dim);font-weight:400;margin-right:4px}
+  .ident{color:var(--dim);font-size:12.5px;margin-top:5px}
+
+  /* 52-week rail — the hero. Where does this sit in its own year? */
+  .yr{margin:20px 0 6px}
+  .track{position:relative;height:3px;background:var(--line);margin:11px 2px}
+  .band{position:absolute;top:0;bottom:0;background:var(--panel2)}
+  .mark{position:absolute;top:-6px;width:2px;height:15px;background:var(--text)}
+  .mark::after{content:attr(data-v);position:absolute;top:-17px;left:50%;transform:translateX(-50%);
+               font-family:var(--mono);font-size:10px;color:var(--text);white-space:nowrap}
+  .ends{display:flex;justify-content:space-between;margin-top:9px}
+
+  /* Trading-week strip — NEPSE runs Sun-Thu; Fri/Sat are structurally closed,
+     and festival holidays punch further gaps. Voids are the information. */
+  .weeks{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px}
+  .wk{display:flex;gap:3px}
+  .day{width:19px;height:23px;border:1px solid var(--line);border-radius:1px;
+       display:flex;align-items:flex-end;justify-content:center;font-family:var(--mono);
+       font-size:8px;color:var(--faint);padding-bottom:2px}
+  .day.traded{background:var(--panel2);border-color:#3C4459;color:var(--dim)}
+  .day.weekend{border-style:dotted;opacity:.4}
+  .day.gap{border-color:var(--unknown);color:var(--unknown)}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  td{padding:5px 0;border-bottom:1px solid var(--line)}
+  tr:last-child td{border-bottom:0}
+  td:last-child{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .k{color:var(--dim)}
+  .pill{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+        padding:2px 6px;border:1px solid currentColor;border-radius:2px}
+  .note{color:var(--faint);font-size:11.5px;margin-top:12px;line-height:1.5}
+  .err{color:var(--down)}
+  svg{display:block;width:100%;height:64px;overflow:visible}
+
+  /* Decision — the one thing the whole pipeline exists to produce. */
+  .decision{margin-bottom:16px;border-left:2px solid var(--line)}
+  .decision.buy{border-left-color:var(--up)} .decision.sell{border-left-color:var(--down)}
+  .decision.hold{border-left-color:var(--unknown)}
+  .verdict{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+  .act{font-size:34px;font-weight:700;letter-spacing:-.02em;line-height:1}
+  .act.buy{color:var(--up)} .act.sell{color:var(--down)} .act.hold{color:var(--unknown)}
+  .levels{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+          gap:1px;background:var(--line);border:1px solid var(--line);margin-top:16px}
+  .levels>div{background:var(--panel2);padding:10px 12px}
+  .levels .v{font-family:var(--mono);font-size:17px;font-variant-numeric:tabular-nums;margin-top:3px}
+  .levels .v.none{color:var(--faint);font-size:12px;font-style:italic}
+  .excerpt{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);
+           color:var(--dim);font-size:12.5px;white-space:pre-wrap;max-height:150px;overflow:auto}
+
+  /* Stage flow, left to right: analysts -> researchers -> trader -> risk -> manager */
+  .flow{display:flex;gap:6px;flex-wrap:wrap;align-items:stretch}
+  .stage{flex:1 1 96px;min-width:96px;border:1px solid var(--line);border-radius:2px;
+         padding:8px 9px;background:var(--panel2);opacity:.45}
+  .stage.done{opacity:1;border-color:#3C4459}
+  .stage .n{font-size:11px;line-height:1.25;margin-top:4px}
+  .stage .tick{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--faint)}
+  .stage.done .tick{color:var(--up)}
+  @media(prefers-reduced-motion:no-preference){
+    .card,.rail{animation:in .35s ease both}
+    @keyframes in{from{opacity:0;transform:translateY(4px)}}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NEPSE <span>Console</span></h1>
+  <span class="lbl" id="clock"></span>
+  <span class="spacer"></span>
+  <span class="lbl"><span class="dot" id="srvdot"></span><span id="srv">connecting</span></span>
+  <button id="refresh">Refresh</button>
+</header>
+
+<div class="rail" id="rail"></div>
+
+<!-- The decision is the product; everything else on this page is input to it. -->
+<div class="card decision" id="decision">
+  <div class="head"><span class="lbl">Decision</span></div>
+  <div class="lbl">loading…</div>
+</div>
+
+<div class="card">
+  <div class="head"><span class="lbl">Agent pipeline</span>
+    <span class="lbl" id="stagecount" style="color:var(--faint)"></span></div>
+  <div class="flow" id="flow"></div>
+</div>
+
+<div class="grid">
+  <div>
+    <div class="card">
+      <div class="head">
+        <span class="lbl">Instrument</span>
+        <select id="sym" aria-label="Choose a listed company"><option>loading…</option></select>
+      </div>
+      <div id="quote"><span class="lbl">Fetching</span></div>
+    </div>
+
+    <div class="card">
+      <div class="head"><span class="lbl">Trading week</span>
+        <span class="lbl" id="weekwk" style="color:var(--faint)">reading from sessions</span></div>
+      <div class="weeks" id="weeks"></div>
+      <div class="note" id="weeknote"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <div class="head"><span class="lbl">Data sources</span></div>
+      <table id="pipe"><tr><td class="k">checking…</td><td></td></tr></table>
+      <div class="note">Each feed points at the body that publishes it — the
+        exchange itself, or the central bank. The unsourced rows have no machine-readable
+        publisher in Nepal, so the analysts get an explicit “unavailable” marker rather
+        than an estimate. Aggregators such as ShareHub Nepal cover these by parsing
+        filings by hand; none offers a public API.</div>
+    </div>
+
+    <div class="card">
+      <div class="head"><span class="lbl">Movers today</span></div>
+      <table id="movers"><tr><td class="k">loading…</td><td></td></tr></table>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = "http://127.0.0.1:8008";
+
+/* ---- Bikram Sambat + Nepal Standard Time ----
+   BS month lengths vary year to year and cannot be derived arithmetically, so
+   this table is generated from the `nepali-datetime` package and anchored at
+   BS 2076-01-01 = 1919-04-14 AD... i.e. 2019-04-14 AD. The walk below was checked
+   against that library across 5,011 consecutive days with zero mismatches.
+   NPT is UTC+05:45 and is computed explicitly, so the clock reads Kathmandu time
+   regardless of where the page is opened. */
+const BS_EPOCH_AD = Date.UTC(2019,3,14), BS_EPOCH_YEAR = 2076;
+const BS_MONTHS = {"2076":[31,32,31,32,31,30,30,30,29,29,30,30],"2077":[31,32,31,32,31,30,30,30,29,30,29,31],"2078":[31,31,31,32,31,31,30,29,30,29,30,30],"2079":[31,31,32,31,31,31,30,29,30,29,30,30],"2080":[31,32,31,32,31,30,30,30,29,29,30,30],"2081":[31,32,31,32,31,30,30,30,29,30,29,31],"2082":[31,31,32,31,31,31,30,29,30,29,30,30],"2083":[31,31,32,31,31,31,30,29,30,29,30,30],"2084":[31,31,32,31,31,30,30,30,29,30,30,30],"2085":[31,32,31,32,30,31,30,30,29,30,30,30],"2086":[30,32,31,32,31,30,30,30,29,30,30,30],"2087":[31,31,32,31,31,31,30,29,30,30,30,30],"2088":[30,31,32,32,30,31,30,30,29,30,30,30],"2089":[30,32,31,32,31,30,30,30,29,30,30,30],"2090":[30,32,31,32,31,30,30,30,29,30,30,30],"2091":[31,31,32,31,31,31,30,30,29,30,30,30],"2092":[30,31,32,32,31,30,30,30,29,30,30,30],"2093":[30,32,31,32,31,30,30,30,29,30,30,30],"2094":[31,31,32,31,31,30,30,30,29,30,30,30],"2095":[31,31,32,31,31,31,30,29,30,30,30,30],"2096":[30,31,32,32,31,30,30,29,30,29,30,30],"2097":[31,32,31,32,31,30,30,30,29,30,30,30],"2098":[31,31,32,31,31,31,29,30,29,30,29,31],"2099":[31,31,32,31,31,31,30,29,29,30,30,30]};
+const BS_NAMES = ["Baishakh","Jestha","Asar","Shrawan","Bhadau","Aswin","Kartik","Mangsir","Poush","Magh","Falgun","Chaitra"];
+const NPT_OFFSET_MIN = 5*60 + 45;
+
+/* Kathmandu wall-clock parts for a given instant, independent of viewer locale. */
+function nptParts(when = new Date()){
+  const shifted = new Date(when.getTime() + NPT_OFFSET_MIN*60000);
+  return {
+    y: shifted.getUTCFullYear(), m: shifted.getUTCMonth(), d: shifted.getUTCDate(),
+    hh: String(shifted.getUTCHours()).padStart(2,"0"),
+    mm: String(shifted.getUTCMinutes()).padStart(2,"0"),
+    ss: String(shifted.getUTCSeconds()).padStart(2,"0"),
+  };
+}
+
+/* AD (y, 0-based month, d) -> {y,m,d,label} in Bikram Sambat, or null off-table. */
+function toBS(y, mIndex, d){
+  let days = Math.round((Date.UTC(y, mIndex, d) - BS_EPOCH_AD) / 86400000);
+  if(days < 0) return null;
+  let by = BS_EPOCH_YEAR;
+  for(;;){
+    const lens = BS_MONTHS[by];
+    if(!lens) return null;                        // beyond the generated table
+    const total = lens.reduce((a,b)=>a+b,0);
+    if(days < total) break;
+    days -= total; by++;
+  }
+  let bm = 0;
+  while(days >= BS_MONTHS[by][bm]){ days -= BS_MONTHS[by][bm]; bm++; }
+  return {y:by, m:bm+1, d:days+1, label:`${BS_NAMES[bm]} ${days+1}, ${by}`};
+}
+
+/* "2026-08-14" -> "Shrawan 29, 2083" (empty string if it cannot be converted). */
+function bsLabel(iso){
+  if(!iso) return "";
+  const [y,m,d] = iso.split("-").map(Number);
+  const bs = toBS(y, m-1, d);
+  return bs ? bs.label : "";
+}
+const $ = id => document.getElementById(id);
+const n2 = v => (v==null||isNaN(v)) ? "—" : Number(v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+
+async function get(path){
+  const t0 = performance.now();
+  const r = await fetch(API+path);
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  return {data: await r.json(), ms: Math.round(performance.now()-t0)};
+}
+
+const state = {bars:[], details:null, timings:{}};
+
+async function track(key, path){
+  try{ const r = await get(path); state.timings[key] = r.ms+" ms"; return r.data; }
+  catch(e){ state.timings[key] = e.message; throw e; }
+}
+
+/* ---- indices ---- */
+async function loadIndices(){
+  const d = await track("indices","/NepseIndex");
+  $("rail").innerHTML = Object.entries(d).map(([name,ix])=>{
+    const pc = Number(ix.perChange);
+    const cls = pc>0?"up":pc<0?"down":"unk";
+    const arrow = pc>0?"▲":pc<0?"▼":"■";
+    return `<div><div class="lbl">${name}</div>
+      <div class="v num">${n2(ix.currentValue ?? ix.close)}
+      <span class="chg ${cls} num">${arrow} ${pc>0?"+":""}${n2(pc)}%</span></div></div>`;
+  }).join("");
+}
+
+/* ---- company picker ---- */
+async function loadCompanies(){
+  const list = await track("companies","/CompanyList");
+  list.sort((a,b)=>a.symbol.localeCompare(b.symbol));
+  $("sym").innerHTML = list.map(c=>
+    `<option value="${c.symbol}"${c.symbol==="NABIL"?" selected":""}>${c.symbol} — ${c.companyName}</option>`).join("");
+  $("sym").setAttribute("data-count", list.length);
+}
+
+/* ---- quote + 52w rail + sparkline ---- */
+async function loadSymbol(sym){
+  $("quote").innerHTML = '<span class="lbl">Fetching '+sym+'</span>';
+  let bars, det;
+  try{
+    [bars, det] = await Promise.all([
+      track("history","/PriceVolumeHistory?symbol="+sym),
+      track("details","/CompanyDetails?symbol="+sym)
+    ]);
+  }catch(e){
+    $("quote").innerHTML = '<span class="err">Could not load '+sym+': '+e.message+'</span>';
+    return;
+  }
+  bars = bars.slice().sort((a,b)=>a.businessDate.localeCompare(b.businessDate)); // oldest first
+  state.bars = bars;
+  const sec = det.security || {};
+  const dto = det.securityDailyTradeDto || {};
+  const last = bars[bars.length-1] || {};
+  const prev = bars[bars.length-2] || {};
+  const close = Number(last.closePrice), pclose = Number(prev.closePrice);
+  const chg = close-pclose, pct = pclose? chg/pclose*100 : NaN;
+  const cls = chg>0?"up":chg<0?"down":"unk";
+  const hi = Number(dto.fiftyTwoWeekHigh ?? Math.max(...bars.map(b=>+b.highPrice)));
+  const lo = Number(dto.fiftyTwoWeekLow  ?? Math.min(...bars.map(b=>+b.lowPrice)));
+  const pos = Math.min(100, Math.max(0, (close-lo)/(hi-lo)*100));
+
+  const closes = bars.map(b=>+b.closePrice);
+  const sma = k => closes.length>=k ? closes.slice(-k).reduce((a,b)=>a+b,0)/k : null;
+
+  $("quote").innerHTML = `
+    <div class="price num"><span class="cur">Rs</span>${n2(close)}
+      <span class="chg ${cls} num" style="font-size:15px">${chg>0?"+":""}${n2(chg)} (${chg>0?"+":""}${n2(pct)}%)</span></div>
+    <div class="ident">${sec.securityName ?? sym} · ${sec.companyId?.sectorMaster?.sectorDescription ?? "—"}
+      <br>last traded ${last.businessDate ?? "—"}${bsLabel(last.businessDate) ? " · " + bsLabel(last.businessDate) + " BS" : ""}</div>
+
+    <div class="yr">
+      <div class="lbl">Position in its 52-week range</div>
+      <div class="track">
+        <div class="band" style="left:0;width:${pos}%"></div>
+        <div class="mark" style="left:${pos}%" data-v="${n2(close)}"></div>
+      </div>
+      <div class="ends"><span class="lbl">Low ${n2(lo)}</span><span class="lbl">High ${n2(hi)}</span></div>
+    </div>
+
+    ${spark(closes)}
+
+    <table style="margin-top:14px">
+      <tr><td class="k">Bars held (≈1 year is all NEPSE serves)</td><td>${bars.length}</td></tr>
+      <tr><td class="k">50-day average</td><td>${n2(sma(50))}</td></tr>
+      <tr><td class="k">200-day average</td><td>${n2(sma(200))}</td></tr>
+      <tr><td class="k">Day range</td><td>${n2(last.lowPrice)} – ${n2(last.highPrice)}</td></tr>
+      <tr><td class="k">Volume · trades</td><td>${Number(last.totalTradedQuantity||0).toLocaleString()} · ${last.totalTrades ?? "—"}</td></tr>
+      <tr><td class="k">Opening price</td><td><span class="pill unk">not published</span></td></tr>
+    </table>`;
+  drawWeeks(bars);
+}
+
+function spark(v){
+  if(v.length<2) return "";
+  const w=600,h=64,lo=Math.min(...v),hi=Math.max(...v),rng=(hi-lo)||1;
+  const pts=v.map((y,i)=>[i/(v.length-1)*w, h-(y-lo)/rng*h]);
+  const line=pts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ");
+  const rising = v[v.length-1] >= v[0];
+  const c = rising? "var(--up)":"var(--down)";
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
+    aria-label="Closing price over the last ${v.length} sessions">
+    <polygon points="0,${h} ${line} ${w},${h}" fill="${c}" opacity=".07"/>
+    <polyline points="${line}" fill="none" stroke="${c}" stroke-width="1.4"
+      vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+/* Which weekdays NEPSE currently trades is derived from the bars, never assumed.
+   The exchange moved from Sunday–Thursday to Monday–Friday in April 2026, so any
+   hardcoded week would silently invent holidays that never happened. */
+function tradingWeekdays(bars){
+  const recent = bars.slice(-40);
+  const seen = new Set(recent.map(b => new Date(b.businessDate+"T00:00:00").getDay()));
+  return seen.size ? seen : new Set([1,2,3,4,5]);
+}
+
+function drawWeeks(bars){
+  const have = new Set(bars.map(b=>b.businessDate));
+  const open = tradingWeekdays(bars);
+  const D=["Su","Mo","Tu","We","Th","Fr","Sa"];
+  const last = new Date(bars[bars.length-1].businessDate+"T00:00:00");
+  const weeks=[]; let gaps=0;
+  for(let w=2; w>=0; w--){
+    const days=[];
+    const sunday = new Date(last); sunday.setDate(last.getDate()-last.getDay()-w*7);
+    for(let i=0;i<7;i++){
+      const d=new Date(sunday); d.setDate(sunday.getDate()+i);
+      const iso=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+      const closed = !open.has(i);
+      const traded = have.has(iso);
+      const future = d > last;
+      let cls = closed ? "weekend" : traded ? "traded" : future ? "weekend" : "gap";
+      if(!closed && !traded && !future) gaps++;
+      const bs = bsLabel(iso);
+      days.push(`<div class="day ${cls}" title="${iso}${bs?" · "+bs+" BS":""} · ${closed?"exchange closed":traded?"traded":future?"not yet":"no session (holiday)"}">${D[i]}</div>`);
+    }
+    weeks.push(`<div class="wk">${days.join("")}</div>`);
+  }
+  $("weeks").innerHTML = weeks.join("");
+  const names = [...open].sort().map(i=>D[i]).join("–");
+  $("weekwk").textContent = `currently ${names}`;
+  $("weeknote").textContent = gaps
+    ? `${gaps} session${gaps>1?"s":""} missing on a normal trading day in the last three weeks — public holidays. Indicators report those dates as "not a trading day" rather than carrying a stale price forward.`
+    : "Every scheduled session in the last three weeks traded.";
+}
+
+/* ---- data sources, grouped by who actually publishes the data ----
+   ShareHub Nepal aggregates most of these but exposes no public API, so each
+   feed here points at the primary publisher it would itself be reading. */
+const NRB_FOREX = "https://www.nrb.org.np/api/forex/v1/rates";
+
+async function loadForex(){
+  const today = new Date(Date.now() + NPT_OFFSET_MIN*60000).toISOString().slice(0,10);
+  const back = new Date(Date.now() + NPT_OFFSET_MIN*60000 - 7*86400000).toISOString().slice(0,10);
+  const r = await fetch(`${NRB_FOREX}?from=${back}&to=${today}&per_page=10&page=1`);
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  const j = await r.json();
+  const days = (j.data && j.data.payload) || j.data || [];
+  const latest = Array.isArray(days) ? days[days.length-1] : null;
+  if(!latest) throw new Error("no rates published");
+  const pick = iso => (latest.rates||[]).find(x=>x.currency?.iso3===iso);
+  return {date: latest.date, usd: pick("USD"), inr: pick("INR")};
+}
+
+async function loadPipeline(){
+  let fx = null, fxErr = "";
+  try{ fx = await loadForex(); }catch(e){ fxErr = e.message; }
+
+  const nepse = [
+    ["Prices &amp; history", state.timings.history ?? "—"],
+    ["Company details", state.timings.details ?? "—"],
+    ["Indices", state.timings.indices ?? "—"],
+    ["Listed companies", $("sym").getAttribute("data-count") ?? "—"],
+    ["Indicators", "computed locally"],
+  ];
+  const missing = [
+    ["Company news", "NEPSE publishes none as data"],
+    ["Insider transactions", "not disclosed as a feed"],
+    ["Inflation &amp; rates", "NRB publishes PDF, not JSON"],
+  ];
+
+  $("pipe").innerHTML =
+    `<tr><td colspan="2" class="lbl" style="padding-top:0">NEPSE · nepalstock.com</td></tr>` +
+    nepse.map(([k,v])=>`<tr><td class="k">${k}</td><td>${v}</td></tr>`).join("") +
+    `<tr><td colspan="2" class="lbl" style="padding-top:10px">Nepal Rastra Bank · nrb.org.np</td></tr>` +
+    (fx
+      ? `<tr><td class="k">USD buy / sell</td><td>${fx.usd?.buy ?? "—"} / ${fx.usd?.sell ?? "—"}</td></tr>
+         <tr><td class="k">INR (per 100)</td><td>${fx.inr?.buy ?? "—"} / ${fx.inr?.sell ?? "—"}</td></tr>
+         <tr><td class="k">Published</td><td>${fx.date}</td></tr>`
+      : `<tr><td class="k">Forex</td><td class="unk">unreachable: ${fxErr}</td></tr>`) +
+    `<tr><td colspan="2" class="lbl" style="padding-top:10px">nepsetrading.com</td></tr>` +
+    `<tr><td class="k">Income statement</td><td>5 fiscal years, quarterly</td></tr>
+     <tr><td class="k">Balance sheet</td><td>5 fiscal years, quarterly</td></tr>` +
+    `<tr><td colspan="2" class="lbl" style="padding-top:10px">Not sourced</td></tr>` +
+    missing.map(([k,v])=>`<tr><td class="k">${k}</td><td class="unk">${v}</td></tr>`).join("");
+}
+
+async function loadMovers(){
+  try{
+    const [g,l] = await Promise.all([get("/TopGainers"), get("/TopLosers")]);
+    const row = (m,cls) => `<tr><td class="k">${m.symbol}</td>
+      <td class="${cls}">${n2(m.ltp ?? m.closingPrice)} &nbsp; ${m.percentageChange>0?"+":""}${n2(m.percentageChange)}%</td></tr>`;
+    $("movers").innerHTML = g.data.slice(0,4).map(m=>row(m,"up")).join("")
+                          + l.data.slice(0,4).map(m=>row(m,"down")).join("");
+  }catch(e){ $("movers").innerHTML = `<tr><td class="err">unavailable: ${e.message}</td><td></td></tr>`; }
+}
+
+/* ---- decision + agent pipeline, from the last completed run ---- */
+const lvl = (label, v, pre) => `<div><div class="lbl">${label}</div>` +
+  (v==null||v==="" ? `<div class="v none">not stated</div>`
+                   : `<div class="v">${pre||""}${typeof v==="number"?n2(v):v}</div>`) + `</div>`;
+
+async function loadRun(){
+  let s;
+  try{
+    const r = await fetch("run_state.json", {cache:"no-store"});
+    s = await r.json();
+  }catch(e){
+    $("decision").innerHTML = `<div class="head"><span class="lbl">Decision</span></div>
+      <span class="err">run_state.json not found — run export_run_state.py</span>`; return;
+  }
+
+  const st = s.stages || [];
+  $("flow").innerHTML = st.length ? st.map(x=>
+    `<div class="stage ${x.done?"done":""}"><div class="tick">${x.done?"DONE":"—"}</div>
+     <div class="n">${x.name}</div></div>`).join("")
+    : ["Market analyst","Sentiment analyst","News analyst","Fundamentals analyst",
+       "Bull researcher","Bear researcher","Research manager","Trader","Risk team",
+       "Portfolio manager"].map(n=>`<div class="stage"><div class="tick">—</div>
+        <div class="n">${n}</div></div>`).join("");
+  const done = st.filter(x=>x.done).length;
+  $("stagecount").textContent = st.length ? `${done} of ${st.length} produced output` : "no run yet";
+
+  const d = s.decision;
+  if(!d || !d.action){
+    $("decision").className = "card decision";
+    $("decision").innerHTML = `<div class="head"><span class="lbl">Decision</span></div>
+      <div class="act" style="color:var(--faint);font-size:22px">Awaiting first completed run</div>
+      <div class="note">${s.message || "The analysis has not reached the Portfolio Manager yet."}
+      Buy/sell, entry, stop-loss and target appear here the moment a run finishes —
+      they are read from the agents' own output, never inferred.</div>`;
+    return;
+  }
+
+  const a = String(d.action).toLowerCase();
+  const kind = a.includes("buy")?"buy" : a.includes("sell")?"sell" : "hold";
+  $("decision").className = "card decision "+kind;
+  $("decision").innerHTML = `
+    <div class="head"><span class="lbl">Decision</span>
+      <span class="lbl" style="color:var(--faint)">${s.ticker||""} · ${s.trade_date||""}
+      · from ${s.decision_source||"run"}${s.complete?"":" · portfolio manager did not finish"}</span></div>
+    <div class="verdict">
+      <span class="act ${kind}">${String(d.action).toUpperCase()}</span>
+      <span class="lbl">${d.time_horizon ? "horizon "+d.time_horizon : ""}</span>
+    </div>
+    <div class="levels">
+      ${lvl("Entry", d.entry_price, "Rs ")}
+      ${lvl("Stop loss (exit down)", d.stop_loss, "Rs ")}
+      ${lvl("Target (exit up)", d.price_target, "Rs ")}
+      ${lvl("Position sizing", d.position_sizing)}
+    </div>
+    ${d.excerpt ? `<div class="excerpt">${d.excerpt.replace(/[<>]/g,"")}</div>` : ""}
+    <div class="note">Research output from the agent pipeline, reproduced as written.
+      Not investment advice.</div>`;
+}
+
+function tickClock(){
+  const p = nptParts();
+  const bs = toBS(p.y, p.m, p.d);
+  const ad = `${String(p.d).padStart(2,"0")} ${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][p.m]} ${p.y}`;
+  $("clock").innerHTML =
+    `<span style="color:var(--text)">${p.hh}:${p.mm}:${p.ss}</span> NPT` +
+    `<span style="color:var(--line)"> · </span>${bs ? bs.label + " BS" : ""}` +
+    `<span style="color:var(--line)"> · </span>${ad}`;
+}
+
+async function refresh(){
+  tickClock();
+  // Liveness is probed with a data endpoint, not /health: the server attaches
+  // its CORS header per-route and /health is the one route that omits it, so a
+  // browser can never read it even while the server is perfectly healthy.
+  try{
+    await loadIndices();
+    $("srvdot").className="dot ok"; $("srv").textContent="server 8008 live";
+  }catch(e){
+    $("srvdot").className="dot bad";
+    $("srv").innerHTML='<span class="err">server 8008 unreachable — start it and refresh</span>';
+    return;
+  }
+  await loadCompanies();
+  await loadSymbol($("sym").value || "NABIL");
+  await Promise.all([loadPipeline(), loadMovers(), loadRun()]);
+}
+
+$("refresh").onclick = refresh;
+$("sym").onchange = e => loadSymbol(e.target.value).then(loadPipeline);
+refresh();
+setInterval(tickClock, 1000);   // NPT runs live; the data only reloads on Refresh
+</script>
+</body>
+</html>

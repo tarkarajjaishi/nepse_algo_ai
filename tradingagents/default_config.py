@@ -19,6 +19,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
     "TRADINGAGENTS_LLM_MAX_RETRIES":      "llm_max_retries",
+    "TRADINGAGENTS_LLM_FALLBACKS":        "llm_fallbacks",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
     # default). Settable here for non-interactive runs; the CLI also offers an
     # interactive choice, which is skipped when the matching var is set.
@@ -100,6 +101,13 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # provider/SDK at its own default (usually 2). Raise it to ride out bursty
     # 429 throttling on rate-limited deployments instead of aborting a run (#1091).
     "llm_max_retries": None,
+    # Cross-provider failover chain, as "provider:model" entries. When the
+    # primary reports its quota exhausted, the deep/quick slots move down this
+    # list instead of aborting the run — free tiers are individually too small
+    # for one analysis (~50-70 calls) but add up across providers. Empty means
+    # no wrapping and the primary is used directly.
+    # e.g. "openrouter:nvidia/nemotron-3.5-lightning:free,nvidia:openai/gpt-oss-120b"
+    "llm_fallbacks": "",
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,
@@ -131,10 +139,10 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # routed to vendors you didn't choose. For ordered fallback, list several,
     # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance, nepse
+        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance, nepse
+        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance, nepse
+        "news_data": "yfinance",             # Options: alpha_vantage, yfinance, nepse
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
         "prediction_markets": "polymarket",  # Options: polymarket (keyless)
     },
@@ -162,3 +170,27 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "":     "SPY",         # default for US-listed tickers (no suffix)
     },
 })
+
+# Market switch. ``TRADINGAGENTS_MARKET=nepse`` routes the four core data
+# categories at the NEPSE vendor in one move, for both main.py and the CLI —
+# the alternative is hand-editing data_vendors above, which then has to be
+# undone to analyse a US ticker. Applied after the dict is built because
+# data_vendors is nested, which the flat _ENV_OVERRIDES coercion cannot express.
+# Unset (the default) leaves every Yahoo default untouched.
+if os.getenv("TRADINGAGENTS_MARKET", "").strip().lower() == "nepse":
+    DEFAULT_CONFIG["data_vendors"].update({
+        "core_stock_apis": "nepse",
+        "technical_indicators": "nepse",
+        "fundamental_data": "nepse",
+        "news_data": "nepse",
+    })
+    # NEPSE itself publishes no statements (PDF filings only), so the two
+    # statement tools are routed per-tool at nepsetrading.com, which parses
+    # them. Everything else in the category stays on NEPSE's own record.
+    DEFAULT_CONFIG["tool_vendors"].update({
+        "get_balance_sheet": "nepsetrading",
+        "get_income_statement": "nepsetrading",
+        # NEPSE has no news feed; merolagani runs the country's market news desk.
+        "get_news": "merolagani",
+        "get_global_news": "merolagani",
+    })

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import yfinance as yf
 from langgraph.prebuilt import ToolNode
 
@@ -32,6 +33,11 @@ from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_llm_client
+from tradingagents.llm_clients.fallback import (
+    FallbackLLM,
+    expand_auto_specs,
+    parse_fallback_specs,
+)
 from tradingagents.reporting import write_report_tree
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -60,6 +66,18 @@ def _coerce_max_retries(value):
     if n < 0:
         raise ValueError(f"llm_max_retries must be >= 0, got {n}")
     return n
+
+
+def _uses_nepse(config: dict) -> bool:
+    """True when prices come from NEPSE, whose returns path is not Yahoo's.
+
+    A module function rather than a method on purpose: the reflection tests drive
+    these code paths through ``MagicMock(spec=TradingAgentsGraph)``, where any
+    method call returns a truthy Mock and would send every ticker down the NEPSE
+    branch. Reading the passed-in config keeps the decision on data the caller
+    actually supplied.
+    """
+    return "nepse" in str(config.get("data_vendors", {}).get("core_stock_apis", ""))
 
 
 class TradingAgentsGraph:
@@ -98,21 +116,8 @@ class TradingAgentsGraph:
         if self.callbacks:
             llm_kwargs["callbacks"] = self.callbacks
 
-        deep_client = create_llm_client(
-            provider=self.config["llm_provider"],
-            model=self.config["deep_think_llm"],
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
-        )
-        quick_client = create_llm_client(
-            provider=self.config["llm_provider"],
-            model=self.config["quick_think_llm"],
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
-        )
-
-        self.deep_thinking_llm = deep_client.get_llm()
-        self.quick_thinking_llm = quick_client.get_llm()
+        self.deep_thinking_llm = self._build_llm(self.config["deep_think_llm"], llm_kwargs)
+        self.quick_thinking_llm = self._build_llm(self.config["quick_think_llm"], llm_kwargs)
 
         self.memory_log = TradingMemoryLog(self.config)
 
@@ -149,6 +154,54 @@ class TradingAgentsGraph:
         self.workflow = self.graph_setup.setup_graph(selected_analysts)
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
+
+    def _build_llm(self, model: str, llm_kwargs: dict[str, Any]) -> Any:
+        """Build one LLM slot, wrapped in the configured cross-provider chain.
+
+        With no ``llm_fallbacks`` configured this returns the bare client exactly
+        as before — the wrapper is only introduced when there is something to
+        fall over to.
+
+        Backups deliberately get ``base_url=None``: ``backend_url`` is specific to
+        the primary provider, and forwarding e.g. OpenRouter's ``/api/v1`` to a
+        Gemini backup would build malformed request URLs. Each client already
+        knows its own endpoint.
+        """
+        primary_provider = self.config["llm_provider"]
+        primary = create_llm_client(
+            provider=primary_provider,
+            model=model,
+            base_url=self.config.get("backend_url"),
+            **llm_kwargs,
+        ).get_llm()
+
+        specs = expand_auto_specs(parse_fallback_specs(self.config.get("llm_fallbacks")))
+        if not specs:
+            return primary
+
+        models, labels = [primary], [f"{primary_provider}:{model}"]
+        for provider, backup_model in specs:
+            if (provider, backup_model) == (primary_provider.lower(), model):
+                # The chain is shared by both slots, so one slot's primary is
+                # usually listed as the other's backup. Falling back to yourself
+                # is a guaranteed-dead hop against the budget you just exhausted.
+                continue
+            try:
+                models.append(
+                    create_llm_client(
+                        provider=provider, model=backup_model, base_url=None, **llm_kwargs
+                    ).get_llm()
+                )
+                labels.append(f"{provider}:{backup_model}")
+            except Exception as exc:  # noqa: BLE001 — a bad backup must not block startup
+                logger.warning(
+                    "Skipping LLM fallback %s:%s (%s)", provider, backup_model, exc
+                )
+
+        if len(models) == 1:
+            return primary
+        logger.info("LLM chain for %s: %s", model, " -> ".join(labels))
+        return FallbackLLM(models, labels)
 
     def _get_provider_kwargs(self) -> dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -227,6 +280,46 @@ class TradingAgentsGraph:
             ),
         }
 
+    def _fetch_returns_nepse(
+        self, ticker: str, trade_date: str, holding_days: int
+    ) -> tuple[float | None, float | None, int | None]:
+        """NEPSE counterpart of ``_fetch_returns``; yfinance has no NEPSE prices.
+
+        Without this the whole reflection/memory layer is silently dead for NEPSE:
+        every lookup returns no rows, so no decision ever resolves and nothing is
+        ever learned from.
+
+        Alpha is None until the local NEPSE Index series (see
+        ``nepse.record_nepse_index_close``) covers both ends of the holding
+        window — NEPSE publishes no multi-day index history, so it cannot be
+        computed retroactively. The raw return still resolves in the meantime.
+        """
+        from tradingagents.dataflows.nepse import fetch_nepse_ohlcv, nepse_index_return
+
+        try:
+            frame = fetch_nepse_ohlcv(ticker)
+            frame = frame[frame["Date"] >= pd.Timestamp(trade_date)].reset_index(drop=True)
+            if len(frame) < 2:
+                return None, None, None
+
+            actual_days = min(holding_days, len(frame) - 1)
+            start_close = float(frame["Close"].iloc[0])
+            if not start_close:
+                return None, None, None
+            raw = (float(frame["Close"].iloc[actual_days]) - start_close) / start_close
+
+            start_day = frame["Date"].iloc[0].strftime("%Y-%m-%d")
+            end_day = frame["Date"].iloc[actual_days].strftime("%Y-%m-%d")
+            bench_ret = nepse_index_return(start_day, end_day)
+            alpha = None if bench_ret is None else raw - bench_ret
+            return raw, alpha, actual_days
+        except Exception as e:  # noqa: BLE001 — mirrors the yfinance path's contract
+            logger.warning(
+                "Could not resolve NEPSE outcome for %s on %s (will retry next run): %s",
+                ticker, trade_date, e,
+            )
+            return None, None, None
+
     def _resolve_benchmark(self, ticker: str) -> str:
         """Pick the benchmark ticker for alpha calculation against ``ticker``.
 
@@ -238,6 +331,10 @@ class TradingAgentsGraph:
         entry, which is the right default because the alpha calculation works
         in USD.
         """
+        if _uses_nepse(self.config):
+            from tradingagents.dataflows.nepse import BENCHMARK_NAME
+
+            return BENCHMARK_NAME
         explicit = self.config.get("benchmark_ticker")
         if explicit:
             return explicit
@@ -259,7 +356,14 @@ class TradingAgentsGraph:
         actual_holding_days)`` or ``(None, None, None)`` if price data is
         unavailable (too recent, delisted, or network error).
         """
+        from tradingagents.dataflows.nepse import BENCHMARK_NAME
         from tradingagents.dataflows.symbol_utils import normalize_symbol
+
+        # Branch on the resolved benchmark, not on config: it already identifies
+        # the market (``_resolve_benchmark`` picked it), and it keeps this method
+        # dependent only on its arguments.
+        if benchmark == BENCHMARK_NAME:
+            return self._fetch_returns_nepse(ticker, trade_date, holding_days)
 
         try:
             start = datetime.strptime(trade_date, "%Y-%m-%d")

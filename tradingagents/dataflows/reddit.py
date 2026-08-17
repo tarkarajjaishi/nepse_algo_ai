@@ -96,13 +96,15 @@ def _fetch_subreddit_rss(
     limit: int,
     timeout: float,
     _retry: bool = True,
-) -> list[dict]:
+) -> list[dict] | None:
     """Default path: parse the public Atom search feed for a subreddit.
 
     Carries no score / comment counts, so those fields are left None and the
     post is tagged ``source="rss"`` for honest display. On a 429 (Reddit's
     per-IP rate limit) we back off once — honouring ``Retry-After`` when
     present — before giving up, so a transient burst doesn't blank the feed.
+
+    ``None`` means the fetch failed; ``[]`` means it succeeded with no matches.
     """
     url = _RSS.format(sub=sub, qs=_search_qs(ticker, limit))
     req = Request(url, headers={"User-Agent": _UA})
@@ -119,12 +121,12 @@ def _fetch_subreddit_rss(
             time.sleep(wait)
             return _fetch_subreddit_rss(ticker, sub, limit, timeout, _retry=False)
         logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
-        return []
+        return None
     except (OSError, http.client.HTTPException, ET.ParseError) as exc:
         # OSError covers URLError/TimeoutError/connection resets; HTTPException
         # covers chunked-transfer errors (IncompleteRead/BadStatusLine, #1024).
         logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
-        return []
+        return None
 
     posts = []
     for entry in root.findall("atom:entry", _ATOM_NS)[:limit]:
@@ -149,7 +151,7 @@ def _fetch_subreddit_json(
     sub: str,
     limit: int,
     timeout: float,
-) -> list[dict]:
+) -> list[dict] | None:
     """Richer JSON search path (carries score / comment counts).
 
     Reddit's WAF currently returns ``403 Blocked`` on this endpoint for
@@ -178,8 +180,14 @@ def _fetch_subreddit(
     sub: str,
     limit: int,
     timeout: float,
-) -> list[dict]:
+) -> list[dict] | None:
     """Fetch one subreddit, RSS-first.
+
+    Returns ``None`` when the fetch itself failed and ``[]`` when the feed was
+    read successfully but held no matching posts. The caller must keep these
+    apart: reporting a rate-limited fetch as "no posts found" tells the sentiment
+    analyst that silence was *confirmed*, and it keeps its confidence high on
+    what is actually zero data.
 
     The JSON search endpoint is reliably WAF-blocked (403) for public clients,
     so we go straight to the RSS feed — which serves our identified User-Agent
@@ -207,10 +215,18 @@ def fetch_reddit_posts(
     ticker = crypto_base(ticker) or ticker
     blocks = []
     total_posts = 0
+    failed_subs = []
     for i, sub in enumerate(subreddits):
         if i > 0:
             time.sleep(inter_request_delay)
         posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
+        if posts is None:
+            # Could not read the feed at all. Reported separately from a genuine
+            # absence of posts so the analyst can discount its own confidence
+            # instead of treating silence as a finding.
+            failed_subs.append(sub)
+            blocks.append(f"r/{sub}: <unavailable: fetch failed, sentiment unknown>")
+            continue
         total_posts += len(posts)
         if not posts:
             blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
@@ -243,8 +259,23 @@ def fetch_reddit_posts(
         blocks.append("\n".join(lines))
 
     if total_posts == 0:
+        subreddit_list = ", ".join(f"r/{s}" for s in subreddits)
+        if len(failed_subs) == len(blocks):
+            # Every source failed, so there is no evidence either way. Must not
+            # render as "no posts found" — that reads as a confirmed quiet tape.
+            return (
+                f"<reddit unavailable: every subreddit fetch failed "
+                f"({subreddit_list}); sentiment unknown, not silent>"
+            )
+        if failed_subs:
+            return (
+                f"<no Reddit posts found mentioning {ticker.upper()} in "
+                f"{subreddit_list} in the past 7 days — but "
+                f"{', '.join(f'r/{s}' for s in failed_subs)} could not be read, "
+                f"so coverage is partial>"
+            )
         return (
             f"<no Reddit posts found mentioning {ticker.upper()} across "
-            f"{', '.join(f'r/{s}' for s in subreddits)} in the past 7 days>"
+            f"{subreddit_list} in the past 7 days>"
         )
     return "\n\n".join(blocks)

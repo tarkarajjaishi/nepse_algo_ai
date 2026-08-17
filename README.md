@@ -233,6 +233,85 @@ print(decision)
 
 See `tradingagents/default_config.py` for all configuration options.
 
+## NEPSE (Nepal Stock Exchange)
+
+Yahoo Finance does not cover NEPSE, so this fork adds Nepali market vendors. Turn
+the whole market on with one switch in `.env`:
+
+```bash
+TRADINGAGENTS_MARKET=nepse
+```
+
+That routes prices, indicators, fundamentals and news at the Nepali vendors.
+Leave it unset and everything behaves exactly as upstream.
+
+### Prerequisite: the NEPSE data server
+
+Prices come from a **separate process** you must run — an unofficial wrapper that
+handles NEPSE's token handshake:
+
+```bash
+git clone https://github.com/surajrimal07/NepseAPI-Unofficial
+cd NepseAPI-Unofficial && pip install -r requirements.txt
+python -m uvicorn server:app --host 127.0.0.1 --port 8008
+```
+
+Invoke `uvicorn` directly rather than `python server.py`, whose `__main__`
+hardcodes port 8000. Then point the framework at it:
+
+```bash
+NEPSE_API_BASE_URL=http://127.0.0.1:8008
+```
+
+### Where each Nepali feed comes from
+
+| Data | Source | Notes |
+| --- | --- | --- |
+| Prices, OHLCV | NEPSE via the local server | ~1 year of daily bars, no opening price |
+| Indicators | computed locally by `stockstats` | nothing Yahoo-specific in that layer |
+| Company record, 52-week range | NEPSE `/CompanyDetails` | |
+| Income statement, balance sheet | nepsetrading.com | parsed from published quarterly filings |
+| Market news | merolagani.com | mostly Nepali, passed through untranslated |
+| Forex | Nepal Rastra Bank official API | used by the dashboard |
+| Cash flow, insider transactions | **none exists** | explicit "unavailable" marker, never estimated |
+
+NEPSE publishes no opening price and no news feed, and Nepal has no
+insider-transaction disclosure. Those gaps return a sentinel the analysts are
+told to treat as unknown, rather than a guess.
+
+Two facts worth knowing before trusting output: the exchange moved from
+**Sunday–Thursday to Monday–Friday in April 2026**, so never hardcode its trading
+week — derive it from the returned bars. And alpha-vs-benchmark cannot be
+backfilled, because NEPSE serves no multi-day index history; the local index
+series accrues forward from first run, so alpha appears after a holding period.
+
+### Free-tier LLM failover
+
+One analysis is roughly 50–70 model calls, which no single free tier covers. Set
+an ordered chain and the deep/quick slots walk it on quota exhaustion or an
+upstream outage:
+
+```bash
+TRADINGAGENTS_LLM_FALLBACKS=google:gemini-3.1-flash-lite,openrouter:auto
+```
+
+`openrouter:auto` resolves at startup from the live catalogue — genuinely $0 on
+both prompt and completion, tool-calling capable, ranked by context length. Never
+hardcode an OpenRouter model id: the list turns over, and a `:free` suffix is a
+naming convention rather than a guarantee.
+
+### Dashboard
+
+A single-file console shows the market, the agent pipeline and the resulting
+decision, with Nepal Standard Time and the Bikram Sambat date:
+
+```bash
+python -m http.server 8009 --bind 127.0.0.1   # then open /dashboard.html
+```
+
+It reads the NEPSE server directly and `run_state.json`, which
+`export_run_state.py` writes at the end of each run.
+
 ## Persistence and Recovery
 
 TradingAgents persists two kinds of state across runs.
