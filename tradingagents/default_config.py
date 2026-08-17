@@ -183,6 +183,8 @@ if os.getenv("TRADINGAGENTS_MARKET", "").strip().lower() == "nepse":
         "technical_indicators": "nepse",
         "fundamental_data": "nepse",
         "news_data": "nepse",
+        # FRED's series are US-centric and need a key; NRB is Nepal's central bank.
+        "macro_data": "nrb",
     })
     # NEPSE itself publishes no statements (PDF filings only), so the two
     # statement tools are routed per-tool at nepsetrading.com, which parses

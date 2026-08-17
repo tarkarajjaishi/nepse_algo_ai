@@ -33,6 +33,7 @@ from .nepsetrading import (
     get_nepsetrading_balance_sheet,
     get_nepsetrading_income_statement,
 )
+from .nrb import get_macro_data as get_nrb_macro_data
 from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
 from .y_finance import (
     get_balance_sheet as get_yfinance_balance_sheet,
@@ -100,6 +101,7 @@ VENDOR_LIST = [
     "nepse",
     "nepsetrading",
     "merolagani",
+    "nrb",
 ]
 
 # Optional enrichment categories. These add macro/event context to the news
@@ -170,6 +172,7 @@ VENDOR_METHODS = {
     # macro_data
     "get_macro_indicators": {
         "fred": get_fred_macro_data,
+        "nrb": get_nrb_macro_data,
     },
     # prediction_markets
     "get_prediction_markets": {
