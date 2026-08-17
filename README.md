@@ -270,14 +270,37 @@ NEPSE_API_BASE_URL=http://127.0.0.1:8008
 | Prices, OHLCV | NEPSE via the local server | ~1 year of daily bars, no opening price |
 | Indicators | computed locally by `stockstats` | nothing Yahoo-specific in that layer |
 | Company record, 52-week range | NEPSE `/CompanyDetails` | |
-| Income statement, balance sheet | nepsetrading.com | parsed from published quarterly filings |
+| Balance sheet, income statement | sharesansar.com | the statutory filing in full — 35 and 33 lines |
+| Five-year statement trend | nepsetrading.com | fallback, and adds history the filing lacks |
 | Market news | merolagani.com | mostly Nepali, passed through untranslated |
-| Forex | Nepal Rastra Bank official API | used by the dashboard |
+| Macro (NPR reference rates) | Nepal Rastra Bank official API | USD/INR plus the remittance corridors |
 | Cash flow, insider transactions | **none exists** | explicit "unavailable" marker, never estimated |
 
 NEPSE publishes no opening price and no news feed, and Nepal has no
-insider-transaction disclosure. Those gaps return a sentinel the analysts are
-told to treat as unknown, rather than a guess.
+insider-transaction disclosure. Cash flow is absent too: quarterly filings carry
+the balance sheet, P&L and ratios, and cash flow appears only in the annual PDF —
+verified against all three sources above. Every such gap returns a sentinel the
+analysts are told to treat as unknown, rather than a guess.
+
+Sentiment is also market-aware: StockTwits and Reddit are **not queried** for
+NEPSE tickers. Neither covers this market, and asking anyway tripped Reddit's
+per-IP rate limit and handed the model three failure placeholders that read like
+three attempted signals.
+
+### Screening the whole market
+
+A full agent analysis is ~60 LLM calls, so one per listed company is ~38,800 —
+not feasible. The deterministic half has no such limit:
+
+```bash
+python screen_all.py            # every listed company, ~13 min, zero LLM cost
+python screen_all.py --limit 25 # quick sample
+```
+
+That writes `screener.json`, which the dashboard renders sortable and
+filterable. Indicators come from the same `stockstats` engine the market analyst
+uses, and are left blank where the history is too short to support them — a
+200-day average computed from twelve bars is worse than no number.
 
 Two facts worth knowing before trusting output: the exchange moved from
 **Sunday–Thursday to Monday–Friday in April 2026**, so never hardcode its trading

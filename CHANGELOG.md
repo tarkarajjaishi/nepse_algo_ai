@@ -17,8 +17,14 @@ free tiers alone.
 - **NEPSE data vendor** (`dataflows/nepse.py`) — prices, indicators, company
   record and 52-week range via a self-hosted NepseAPI server. Indicators reuse
   the existing `stockstats` path unchanged; only OHLCV sourcing needed a branch.
-- **Quarterly financials** (`dataflows/nepsetrading.py`) — income statement and
-  balance sheet across five fiscal years, filling a gap NEPSE leaves entirely.
+- **Statutory quarterly filings** (`dataflows/sharesansar.py`) — the filing as
+  submitted: 35 balance-sheet lines, 33 income-statement lines, 18 regulatory
+  ratios. Preferred source for statements; crawling is explicitly permitted by
+  its robots.txt.
+- **Five-year statement trend** (`dataflows/nepsetrading.py`) — fallback behind
+  sharesansar, and the only source of multi-year history.
+- **Macro** (`dataflows/nrb.py`) — official NPR reference rates from Nepal Rastra
+  Bank. FRED is US-centric and needs a key, so a NEPSE run had no macro at all.
 - **Nepali market news** (`dataflows/merolagani.py`) — headlines with timestamps,
   passed through untranslated.
 - **Cross-provider LLM failover** (`llm_clients/fallback.py`) — ordered
@@ -29,6 +35,9 @@ free tiers alone.
   categories at the Nepali vendors, for both `main.py` and the CLI.
 - **Dashboard** (`dashboard.html`) — market, agent pipeline and decision, with
   Nepal Standard Time and Bikram Sambat dates.
+- **Market-wide screener** (`screen_all.py`) — every listed security with prices
+  and indicators, ~13 minutes and zero LLM cost, rendered sortable in the
+  dashboard. A full agent analysis per company would be ~38,800 model calls.
 
 ### Fixed
 
@@ -36,6 +45,18 @@ free tiers alone.
   quiet tape. A rate-limited fetch now returns an explicit unavailable marker, so
   the sentiment analyst discounts its confidence instead of treating zero data as
   a finding.
+
+### Also fixed
+
+- NEPSE pads non-trading securities with `close = 0, volume = 0` rows. Passed
+  through they dragged every average toward zero — a debenture quoted at 1000
+  reported a 200-day average of 155. Liquid names were unaffected, which is why
+  it only surfaced when the whole market was screened.
+- Four NEPSE vendors did not match the arguments `route_to_vendor` passes; two
+  had never executed inside an agent. `tests/test_vendor_contracts.py` now binds
+  every vendor against the real call for its tool.
+- StockTwits and Reddit are no longer queried for NEPSE tickers: no coverage, and
+  the calls tripped Reddit's per-IP rate limit.
 
 ### Notes
 
