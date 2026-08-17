@@ -35,6 +35,10 @@ from .nepsetrading import (
 )
 from .nrb import get_macro_data as get_nrb_macro_data
 from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
+from .sharesansar import (
+    get_sharesansar_balance_sheet,
+    get_sharesansar_income_statement,
+)
 from .y_finance import (
     get_balance_sheet as get_yfinance_balance_sheet,
     get_cashflow as get_yfinance_cashflow,
@@ -102,6 +106,7 @@ VENDOR_LIST = [
     "nepsetrading",
     "merolagani",
     "nrb",
+    "sharesansar",
 ]
 
 # Optional enrichment categories. These add macro/event context to the news
@@ -139,6 +144,7 @@ VENDOR_METHODS = {
         "yfinance": get_yfinance_balance_sheet,
         "nepse": get_nepse_balance_sheet,
         "nepsetrading": get_nepsetrading_balance_sheet,
+        "sharesansar": get_sharesansar_balance_sheet,
     },
     "get_cashflow": {
         "alpha_vantage": get_alpha_vantage_cashflow,
@@ -150,6 +156,7 @@ VENDOR_METHODS = {
         "yfinance": get_yfinance_income_statement,
         "nepse": get_nepse_income_statement,
         "nepsetrading": get_nepsetrading_income_statement,
+        "sharesansar": get_sharesansar_income_statement,
     },
     # news_data
     "get_news": {

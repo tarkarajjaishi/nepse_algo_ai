@@ -47,9 +47,13 @@ def test_market_switch_survives_the_cli(nepse_env):
 
 
 def test_per_tool_vendors_survive_the_cli(nepse_env):
+    """Assert the routing intent, not an exact string — these are ordered chains
+    and adding a fallback should not break the test that guards the switch."""
     cfg = _build_run_config(selections(), checkpoint=None)
-    assert cfg["tool_vendors"]["get_income_statement"] == "nepsetrading"
-    assert cfg["tool_vendors"]["get_balance_sheet"] == "nepsetrading"
+    for tool in ("get_income_statement", "get_balance_sheet"):
+        chain = [v.strip() for v in cfg["tool_vendors"][tool].split(",")]
+        assert chain[0] == "sharesansar", f"{tool} should prefer the full filing"
+        assert "nepsetrading" in chain, f"{tool} should keep the trend source as fallback"
     assert cfg["tool_vendors"]["get_news"] == "merolagani"
 
 

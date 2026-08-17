@@ -190,8 +190,11 @@ if os.getenv("TRADINGAGENTS_MARKET", "").strip().lower() == "nepse":
     # statement tools are routed per-tool at nepsetrading.com, which parses
     # them. Everything else in the category stays on NEPSE's own record.
     DEFAULT_CONFIG["tool_vendors"].update({
-        "get_balance_sheet": "nepsetrading",
-        "get_income_statement": "nepsetrading",
+        # sharesansar first: it serves the statutory filing in full (35 balance
+        # sheet lines vs 4 summary rows) and permits crawling in robots.txt.
+        # nepsetrading is the fallback and adds a five-year trend.
+        "get_balance_sheet": "sharesansar,nepsetrading",
+        "get_income_statement": "sharesansar,nepsetrading",
         # NEPSE has no news feed; merolagani runs the country's market news desk.
         "get_news": "merolagani",
         "get_global_news": "merolagani",
