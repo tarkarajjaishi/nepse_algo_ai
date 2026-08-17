@@ -104,6 +104,24 @@
   .excerpt{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);
            color:var(--dim);font-size:12.5px;white-space:pre-wrap;max-height:150px;overflow:auto}
 
+  /* Screener: the whole market, deterministic signals only. */
+  .scroll{max-height:420px;overflow:auto;border:1px solid var(--line)}
+  table.screen{width:100%;border-collapse:collapse;font-size:12px}
+  table.screen th{position:sticky;top:0;background:var(--panel2);z-index:1;
+    font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--faint);text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);
+    cursor:pointer;user-select:none;white-space:nowrap}
+  table.screen th:first-child,table.screen th.l{text-align:left}
+  table.screen th:hover{color:var(--text)}
+  table.screen td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;
+    font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  table.screen td.l{text-align:left;font-family:var(--sans)}
+  table.screen tr:hover td{background:var(--panel2)}
+  table.screen td.sym{color:var(--text);font-weight:600;cursor:pointer}
+  .nil{color:var(--faint)}
+  input#scrfind{font-family:var(--mono);font-size:11px;background:var(--panel2);
+    color:var(--text);border:1px solid var(--line);padding:5px 9px;border-radius:2px;width:190px}
+
   /* Stage flow, left to right: analysts -> researchers -> trader -> risk -> manager */
   .flow{display:flex;gap:6px;flex-wrap:wrap;align-items:stretch}
   .stage{flex:1 1 96px;min-width:96px;border:1px solid var(--line);border-radius:2px;
@@ -140,6 +158,16 @@
   <div class="head"><span class="lbl">Agent pipeline</span>
     <span class="lbl" id="stagecount" style="color:var(--faint)"></span></div>
   <div class="flow" id="flow"></div>
+</div>
+
+<div class="card">
+  <div class="head"><span class="lbl">Screener</span>
+    <span class="lbl" id="scrcount" style="color:var(--faint)">loading…</span>
+    <span class="spacer"></span>
+    <input id="scrfind" placeholder="filter symbol / sector" aria-label="Filter the screener">
+  </div>
+  <div class="scroll"><table class="screen" id="screener"></table></div>
+  <div class="note" id="scrnote"></div>
 </div>
 
 <div class="grid">
@@ -507,6 +535,79 @@ function tickClock(){
     `<span style="color:var(--line)"> · </span>${ad}`;
 }
 
+/* ---- screener: every listed company, deterministic signals only ----
+   No LLM is involved. A full agent analysis is ~60 model calls, so 647 of them
+   is ~38,800 calls — the data half of the pipeline scales to the whole market,
+   the reasoning half does not. */
+const SCR_COLS = [
+  ["symbol", "Symbol", "l"], ["sector", "Sector", "l"],
+  ["close", "Close"], ["change_pct", "Chg %"], ["rsi", "RSI"],
+  ["sma50", "50 SMA"], ["sma200", "200 SMA"], ["pos52", "52w pos"],
+  ["bars", "Bars"],
+];
+let scrRows = [], scrSort = {key:"symbol", dir:1};
+
+function drawScreener(){
+  const q = ($("scrfind").value || "").trim().toLowerCase();
+  const rows = scrRows
+    .filter(r => !q || r.symbol.toLowerCase().includes(q) || (r.sector||"").toLowerCase().includes(q))
+    .sort((a,b)=>{
+      const k = scrSort.key, x = a[k], y = b[k];
+      if(x == null) return 1;              // nulls sink, whichever way we sort
+      if(y == null) return -1;
+      return (typeof x === "number" ? x - y : String(x).localeCompare(String(y))) * scrSort.dir;
+    });
+
+  const cell = (r, key) => {
+    const v = r[key];
+    if(v == null) return `<td class="nil" title="not enough history for this indicator">—</td>`;
+    if(key === "symbol") return `<td class="l sym" data-sym="${v}">${v}</td>`;
+    if(key === "sector") return `<td class="l">${v}</td>`;
+    if(key === "change_pct") return `<td class="${v>0?"up":v<0?"down":""}">${v>0?"+":""}${n2(v)}</td>`;
+    if(key === "rsi") return `<td class="${v>=70?"down":v<=30?"up":""}">${n2(v)}</td>`;
+    if(key === "pos52") return `<td>${n2(v)}%</td>`;
+    if(key === "bars") return `<td class="${v<200?"unk":""}">${v}</td>`;
+    return `<td>${n2(v)}</td>`;
+  };
+
+  $("screener").innerHTML =
+    "<thead><tr>" + SCR_COLS.map(([k,label,cls]) =>
+      `<th class="${cls||""}" data-k="${k}">${label}${scrSort.key===k?(scrSort.dir>0?" ▲":" ▼"):""}</th>`
+    ).join("") + "</tr></thead><tbody>" +
+    rows.map(r => "<tr>" + SCR_COLS.map(([k]) => cell(r,k)).join("") + "</tr>").join("") +
+    "</tbody>";
+
+  $("screener").querySelectorAll("th").forEach(th => th.onclick = () => {
+    const k = th.dataset.k;
+    scrSort = {key:k, dir: scrSort.key === k ? -scrSort.dir : (k==="symbol"||k==="sector" ? 1 : -1)};
+    drawScreener();
+  });
+  $("screener").querySelectorAll("td.sym").forEach(td => td.onclick = () => {
+    $("sym").value = td.dataset.sym;
+    loadSymbol(td.dataset.sym).then(loadPipeline);
+    window.scrollTo({top:0, behavior:"smooth"});
+  });
+  $("scrcount").textContent = `${rows.length} of ${scrRows.length} shown`;
+}
+
+async function loadScreener(){
+  try{
+    const r = await fetch("screener.json", {cache:"no-store"});
+    const d = await r.json();
+    scrRows = d.rows || [];
+    $("scrnote").textContent =
+      `${d.counts.screened} of ${d.counts.listed} listed securities screened; ` +
+      `${d.counts.skipped} skipped for having no usable price history (mostly debentures ` +
+      `and promoter lines). Indicators use the same stockstats engine as the agents, and ` +
+      `are left blank where the history is too short to support them. No LLM involved.`;
+    drawScreener();
+  }catch(e){
+    $("scrcount").textContent = "not generated yet";
+    $("scrnote").innerHTML = `Run <code>python screen_all.py</code> to build it.`;
+  }
+}
+$("scrfind").oninput = drawScreener;
+
 async function refresh(){
   tickClock();
   // Liveness is probed with a data endpoint, not /health: the server attaches
@@ -522,7 +623,7 @@ async function refresh(){
   }
   await loadCompanies();
   await loadSymbol($("sym").value || "NABIL");
-  await Promise.all([loadPipeline(), loadMovers(), loadRun()]);
+  await Promise.all([loadPipeline(), loadMovers(), loadRun(), loadScreener()]);
 }
 
 $("refresh").onclick = refresh;

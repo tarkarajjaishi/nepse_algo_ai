@@ -56,3 +56,36 @@ def test_units_are_never_converted():
     from tradingagents.dataflows.nepsetrading import UNITS_NOTE
     assert "arab" in UNITS_NOTE and "crore" in UNITS_NOTE
     assert _cells(_Row(["12.46 Ar"])) == ["12.46 Ar"]
+
+
+class TestZeroPricePlaceholdersRejected:
+    """NEPSE pads non-trading securities with close=0, volume=0 rows. A zero is
+    not a price: fed to stockstats it drags every average toward zero, and a
+    debenture quoted at 1000 came back with a '200-day average' of 155."""
+
+    @staticmethod
+    def _rows():
+        # Shape copied from a real /PriceVolumeHistory response for a debenture.
+        pad = [{"businessDate": f"2026-07-{d:02d}", "closePrice": 0, "highPrice": 0,
+                "lowPrice": 0, "totalTradedQuantity": 0} for d in range(1, 6)]
+        real = [{"businessDate": "2026-08-14", "closePrice": 1000.0, "highPrice": 1000.0,
+                 "lowPrice": 1000.0, "totalTradedQuantity": 12}]
+        return pad + real
+
+    def test_placeholder_rows_are_dropped(self, monkeypatch):
+        import tradingagents.dataflows.nepse as nepse
+
+        monkeypatch.setattr(nepse, "_get", lambda *a, **k: self._rows())
+        monkeypatch.setattr(nepse, "record_nepse_index_close", lambda: None)
+        frame = nepse.fetch_nepse_ohlcv("ADBLB")
+        assert len(frame) == 1
+        assert float(frame["Close"].iloc[0]) == 1000.0
+
+    def test_all_placeholder_history_raises_rather_than_returning_zeros(self, monkeypatch):
+        import tradingagents.dataflows.nepse as nepse
+        from tradingagents.dataflows.errors import NoMarketDataError
+
+        monkeypatch.setattr(nepse, "_get", lambda *a, **k: self._rows()[:5])
+        monkeypatch.setattr(nepse, "record_nepse_index_close", lambda: None)
+        with pytest.raises(NoMarketDataError, match="zero-price placeholder"):
+            nepse.fetch_nepse_ohlcv("DEAD")

@@ -213,6 +213,20 @@ def fetch_nepse_ohlcv(symbol: str) -> pd.DataFrame:
     frame = frame.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
     if frame.empty:
         raise NoMarketDataError(symbol, None, "no NEPSE rows had a parseable date")
+
+    # NEPSE pads the history of securities that did not trade with placeholder
+    # rows carrying close = 0 and volume = 0. A close of zero is not a price: fed
+    # to stockstats it drags every average toward zero, and a debenture quoted at
+    # 1000 comes back with a "200-day average" of 155. Drop them rather than
+    # letting a non-price masquerade as one.
+    priced = pd.to_numeric(frame["Close"], errors="coerce")
+    frame = frame[priced.notna() & (priced > 0)].reset_index(drop=True)
+    if frame.empty:
+        raise NoMarketDataError(
+            symbol, None,
+            "every NEPSE row was a zero-price placeholder — this security has "
+            "not traded in the served window",
+        )
     # Stable OHLCV order, minus whatever this server does not serve.
     return frame[[c for c in _COLUMN_ORDER if c in frame.columns]]
 
